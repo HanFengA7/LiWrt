@@ -24,6 +24,7 @@ env:
   REPO_BRANCH: master
   FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
+  PATCHES_PATH: patches
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
   UPLOAD_BIN_DIR: false
@@ -89,6 +90,13 @@ jobs:
         TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
 
+    - name: Apply patches
+      run: |
+        [ -d $PATCHES_PATH ] && mv $PATCHES_PATH openwrt/$PATCHES_PATH
+        cd openwrt
+        [ -d $PATCHES_PATH ] && for FILE in $(ls $PATCHES_PATH | grep .patch); do git apply --check $PATCHES_PATH/$FILE; git apply $PATCHES_PATH/$FILE; done
+        git status -s
+
     - name: Download package
       id: package
       run: |
@@ -108,6 +116,17 @@ jobs:
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+        echo "::set-output name=status::success"
+
+    - name: Build PbBoot firmware
+      if: steps.compile.outputs.status == 'success' && !cancelled()
+      run: |
+          cd openwrt/bin/targets/$ARCH_NAME/$CPU_NAME
+          dd if=/dev/zero bs=4M count=1 | tr "\000" "\377" > padded_kernel.bin && \
+          dd if=openwrt-${ARCH_NAME}-${CPU_NAME}-${DEVICE_NAME}-squashfs-kernel1.bin of=padded_kernel.bin conv=notrunc && \
+          cat padded_kernel.bin openwrt-${ARCH_NAME}-${CPU_NAME}-${DEVICE_NAME}-squashfs-rootfs0.bin > openwrt-${ARCH_NAME}-${CPU_NAME}-${DEVICE_NAME}-squashfs-pbboot.bin && \
+          rm -rf padded_kernel.bin && \
+          sha256sum -b openwrt-${ARCH_NAME}-${CPU_NAME}-${DEVICE_NAME}-squashfs-pbboot.bin >> sha256sums
 
     - name: Check space usage
       if: (!cancelled())
